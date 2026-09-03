@@ -1,0 +1,56 @@
+name: CI Go
+
+on:
+  workflow_call:
+    inputs:
+      go-version:
+        type: string
+        default: "1.26"
+      coverage-threshold:
+        type: number
+        default: 60
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.go-version }}
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.go-version }}
+      - run: go test ./... -race -covermode=atomic -coverprofile=coverage.out
+      - env:
+          THRESHOLD: ${{ inputs.coverage-threshold }}
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
+          echo "cobertura ${total}% (minimo ${THRESHOLD}%)"
+          awk -v t="$total" -v m="$THRESHOLD" 'BEGIN { exit !(t+0 >= m+0) }'
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          tags: ${{ github.event.repository.name }}:ci
+
+  secrets:
+    uses: Discordia-Grupo-15/.github/.github/workflows/secrets-scan.yml@main
