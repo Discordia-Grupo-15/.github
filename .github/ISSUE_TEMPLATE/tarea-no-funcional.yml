@@ -1,0 +1,38 @@
+name: Tarea no funcional
+description: Infraestructura, pipeline, arquitectura o documentacion.
+title: "[No funcional] "
+labels: ["no-funcional"]
+body:
+  - type: input
+    id: puntos
+    attributes:
+      label: Puntos
+      placeholder: "5"
+    validations: { required: true }
+
+  - type: textarea
+    id: objetivo
+    attributes:
+      label: Objetivo
+    validations: { required: true }
+
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definicion de terminado
+      value: |
+        - [ ]
+        - [ ]
+    validations: { required: true }
+
+  - type: dropdown
+    id: adr
+    attributes:
+      label: Requiere ADR
+      options: ["No", "Si"]
+    validations: { required: true }
+
+  - type: textarea
+    id: repos
+    attributes:
+      label: Repos afectados
