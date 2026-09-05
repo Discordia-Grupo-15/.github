@@ -2,8 +2,10 @@ name: CI
 
 on:
   pull_request:
+  # develop is where work lands, so it needs CI too: without it a merge that
+  # breaks the branch goes unnoticed until someone opens the next pull request.
   push:
-    branches: [main]
+    branches: [main, develop]
 
 jobs:
   secrets:
