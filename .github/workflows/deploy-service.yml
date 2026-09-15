@@ -1,0 +1,67 @@
+name: Deploy service
+
+# Deploys one service of the compose stack over SSH. Each service repo calls it
+# with its own name, so updating identity does not restart the gateway.
+#
+# The host is prepared beforehand and by hand: Docker installed, the compose
+# file and the .env in place, and `docker login ghcr.io` done once. This
+# workflow only moves a service from one image to another.
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: Service name exactly as it appears in the compose file.
+        type: string
+        required: true
+      compose_dir:
+        description: Directory on the host holding the compose file and the .env.
+        type: string
+        default: /opt/discordia
+      compose_file:
+        type: string
+        default: compose.prod.yaml
+    secrets:
+      DEPLOY_HOST:
+        required: true
+      DEPLOY_USER:
+        required: true
+      DEPLOY_SSH_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          SERVICE: ${{ inputs.service }}
+          DIR: ${{ inputs.compose_dir }}
+          FILE: ${{ inputs.compose_file }}
+        run: |
+          set -euo pipefail
+
+          install -m 600 /dev/null key
+          echo "$SSH_KEY" > key
+
+          # The tag publish-image.yml puts on every build: sha- plus the first
+          # seven characters of the commit. It never moves, so whatever ends up
+          # running can be traced back to one exact commit.
+          TAG="sha-$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+
+          # IMAGE_TAG is passed inline and takes precedence over the .env on the
+          # host, which stays on a moving tag. A later plain `up -d` therefore
+          # does NOT keep this build: it takes whatever that tag points at then.
+          #
+          # --wait blocks until the container reports healthy and exits non zero
+          # if it never does, so a deploy that starts a broken image fails here
+          # instead of going green while the service crashloops.
+          ssh -i key -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
+            "cd '$DIR' \
+             && IMAGE_TAG='$TAG' docker compose -f '$FILE' pull '$SERVICE' \
+             && IMAGE_TAG='$TAG' docker compose -f '$FILE' up -d --wait '$SERVICE'"
