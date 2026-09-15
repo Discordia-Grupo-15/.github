@@ -27,8 +27,16 @@ jobs:
           node-version: ${{ inputs.node-version }}
           cache: npm
       - run: npm ci
+      # Shared packages first, so the app compiles against a current build of
+      # them. Skips the ones that do not exist yet: --if-present covers a
+      # missing script, not a missing workspace, and npm fails the whole step
+      # when a named workspace has no package.json of its own.
       - if: inputs.app != ''
-        run: npm run build --if-present --workspace packages/shared --workspace packages/api-client
+        run: |
+          for w in packages/shared packages/api-client; do
+            [ -f "$w/package.json" ] || continue
+            npm run build --if-present --workspace "$w"
+          done
       - run: |
           if [ -n "$APP" ]; then W="--workspace apps/$APP"; else W=""; fi
           npm run lint --if-present $W
