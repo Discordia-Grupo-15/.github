@@ -1,0 +1,60 @@
+name: Publish image
+
+on:
+  workflow_call:
+    inputs:
+      platforms:
+        description: Architectures to build for.
+        type: string
+        default: linux/amd64,linux/arm64
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # GHCR rejects capitals in an image name and the organisation has them,
+      # so the repository path is lowercased before it is used as a tag.
+      - id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      # QEMU is what lets an amd64 runner build an arm64 image. Without arm64,
+      # every Apple Silicon laptop would run these images emulated.
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.image.outputs.name }}
+          # Every image gets a sha tag, which never moves, so a running
+          # container can always be traced back to a commit. develop and latest
+          # move, and are what local-env and the deployment follow.
+          tags: |
+            type=sha,format=short
+            type=raw,value=develop,enable=${{ github.ref == 'refs/heads/develop' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          # metadata-action writes org.opencontainers.image.source here, which
+          # is what links the package to its repository on GitHub. Without it
+          # the package floats loose in the organisation.
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
