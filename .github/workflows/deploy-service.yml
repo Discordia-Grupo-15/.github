@@ -54,14 +54,21 @@ jobs:
           # running can be traced back to one exact commit.
           TAG="sha-$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
 
-          # IMAGE_TAG is passed inline and takes precedence over the .env on the
-          # host, which stays on a moving tag. A later plain `up -d` therefore
-          # does NOT keep this build: it takes whatever that tag points at then.
+          # One tag variable per service, derived from its name:
+          # identity-service -> IDENTITY_SERVICE_TAG. A single shared IMAGE_TAG
+          # would apply to every image in the file, and since each repo tags with
+          # its own commits, deploying gateway would make Compose resolve
+          # identity-service at gateway's sha and fail with "not found".
+          VAR="$(printf '%s' "$SERVICE" | tr 'a-z-' 'A-Z_')_TAG"
+
+          # The variable is passed inline and takes precedence over the .env on
+          # the host, which stays on a moving tag. A later plain `up -d` does NOT
+          # keep this build: it takes whatever that tag points at then.
           #
           # --wait blocks until the container reports healthy and exits non zero
           # if it never does, so a deploy that starts a broken image fails here
           # instead of going green while the service crashloops.
           ssh -i key -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
             "cd '$DIR' \
-             && IMAGE_TAG='$TAG' docker compose -f '$FILE' pull '$SERVICE' \
-             && IMAGE_TAG='$TAG' docker compose -f '$FILE' up -d --wait '$SERVICE'"
+             && $VAR='$TAG' docker compose -f '$FILE' pull '$SERVICE' \
+             && $VAR='$TAG' docker compose -f '$FILE' up -d --wait '$SERVICE'"
