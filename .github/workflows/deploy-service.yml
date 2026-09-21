@@ -61,14 +61,25 @@ jobs:
           # identity-service at gateway's sha and fail with "not found".
           VAR="$(printf '%s' "$SERVICE" | tr 'a-z-' 'A-Z_')_TAG"
 
-          # The variable is passed inline and takes precedence over the .env on
-          # the host, which stays on a moving tag. A later plain `up -d` does NOT
-          # keep this build: it takes whatever that tag points at then.
+          # The tag is written into the host's .env instead of being passed
+          # inline, because an inline variable only lives for the length of this
+          # command. Once it is gone, the compose file falls back to its default
+          # of a moving tag, and `up -d` reuses whatever image that name points
+          # at on that disk. It never pulls, so it silently keeps an old build:
+          # that is how identity-service ran five-day-old code for two days
+          # while its deploys reported success.
+          #
+          # Rewriting the file rather than appending keeps one line per service
+          # however many times this runs, and leaves the .env readable as the
+          # record of what is deployed.
           #
           # --wait blocks until the container reports healthy and exits non zero
           # if it never does, so a deploy that starts a broken image fails here
           # instead of going green while the service crashloops.
           ssh -i key -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
             "cd '$DIR' \
-             && $VAR='$TAG' docker compose -f '$FILE' pull '$SERVICE' \
-             && $VAR='$TAG' docker compose -f '$FILE' up -d --wait '$SERVICE'"
+             && touch .env \
+             && { grep -v '^$VAR=' .env; printf '%s=%s\n' '$VAR' '$TAG'; } > .env.tmp \
+             && mv .env.tmp .env \
+             && docker compose -f '$FILE' pull '$SERVICE' \
+             && docker compose -f '$FILE' up -d --wait '$SERVICE'"
