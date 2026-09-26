@@ -35,10 +35,17 @@ jobs:
         with:
           enable-cache: true
           python-version: ${{ inputs.python-version }}
-      - run: uv sync --all-extras --dev
-      - run: uv run ruff check .
-      # The steps below run even after a lint failure, so a single run reports
-      # everything that is wrong instead of one push per problem.
+      # The images install with `uv sync --frozen`, which fails when uv.lock is
+      # behind pyproject.toml. A plain `uv sync` here would quietly update the
+      # lock and pass, so a stale lock only surfaced when publishing the image.
+      - run: uv lock --check
+      # The steps below run even after an earlier failure, so a single run
+      # reports everything that is wrong instead of one push per problem.
+      # --frozen installs what the lock says, the same as the image does.
+      - if: ${{ !cancelled() }}
+        run: uv sync --frozen --all-extras --dev
+      - if: ${{ !cancelled() }}
+        run: uv run ruff check .
       - if: ${{ !cancelled() }}
         run: uv run ruff format --check .
       - if: ${{ !cancelled() }}
