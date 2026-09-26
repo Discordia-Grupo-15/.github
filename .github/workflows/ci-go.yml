@@ -9,48 +9,49 @@ on:
       coverage-threshold:
         type: number
         default: 60
+      gitleaks-version:
+        type: string
+        default: "8.30.1"
 
 permissions:
   contents: read
 
 jobs:
-  lint:
+  # One job rather than lint, test and secrets in parallel: GitHub rounds every
+  # job up to a whole minute, so four jobs of a few seconds each were billed as
+  # four minutes. The image build is not here either: build-image covers it,
+  # called by each repo only on pull requests that touch how the image is
+  # built, so a pull request that changes only code does not pay for it.
+  check:
     runs-on: ubuntu-latest
     steps:
+      # Full history for gitleaks, which scans every commit.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ inputs.go-version }}
       - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
-      - run: go vet ./...
-      - uses: golangci/golangci-lint-action@v9
+      # The steps below run even after a lint failure, so a single run reports
+      # everything that is wrong instead of one push per problem.
+      - if: ${{ !cancelled() }}
+        run: go vet ./...
+      - if: ${{ !cancelled() }}
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.2
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ inputs.go-version }}
-      - run: go test ./... -race -covermode=atomic -coverprofile=coverage.out
-      - env:
+      - id: test
+        if: ${{ !cancelled() }}
+        run: go test ./... -race -covermode=atomic -coverprofile=coverage.out
+      - if: ${{ !cancelled() && steps.test.outcome == 'success' }}
+        env:
           THRESHOLD: ${{ inputs.coverage-threshold }}
         run: |
           total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
           echo "cobertura ${total}% (minimo ${THRESHOLD}%)"
           awk -v t="$total" -v m="$THRESHOLD" 'BEGIN { exit !(t+0 >= m+0) }'
-
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/build-push-action@v7
+      - if: ${{ !cancelled() }}
+        uses: Discordia-Grupo-15/.github/.github/actions/gitleaks@main
         with:
-          context: .
-          push: false
-          tags: ${{ github.event.repository.name }}:ci
-
-  secrets:
-    uses: Discordia-Grupo-15/.github/.github/workflows/secrets-scan.yml@main
+          version: ${{ inputs.gitleaks-version }}
