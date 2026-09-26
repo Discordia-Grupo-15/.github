@@ -3,43 +3,69 @@ name: CI Node
 on:
   workflow_call:
     inputs:
-      app:
-        description: Workspace bajo apps/. Vacio para un repo de una sola app.
+      apps:
+        description: >
+          Workspaces under apps/, separated by spaces. Empty for a repo with a
+          single app.
         type: string
         default: ""
       node-version:
         type: string
         default: "24"
+      gitleaks-version:
+        type: string
+        default: "8.30.1"
 
 permissions:
   contents: read
 
 jobs:
+  # One job for every app rather than one call per app: GitHub rounds every job
+  # up to a whole minute, and each call repeated npm ci and the build of the
+  # shared packages. The secret scan runs here too for the same reason.
   check:
-    name: ${{ inputs.app || 'check' }}
     runs-on: ubuntu-latest
     env:
-      APP: ${{ inputs.app }}
+      APPS: ${{ inputs.apps }}
     steps:
+      # Full history for gitleaks, which scans every commit.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           cache: npm
       - run: npm ci
-      # Shared packages first, so the app compiles against a current build of
+      # Shared packages first, so the apps compile against a current build of
       # them. Skips the ones that do not exist yet: --if-present covers a
       # missing script, not a missing workspace, and npm fails the whole step
       # when a named workspace has no package.json of its own.
-      - if: inputs.app != ''
+      - if: inputs.apps != ''
         run: |
           for w in packages/shared packages/api-client; do
             [ -f "$w/package.json" ] || continue
             npm run build --if-present --workspace "$w"
           done
+      # Every app is checked even after one fails, so a single run reports all
+      # of them; the step fails at the end if any did.
       - run: |
-          if [ -n "$APP" ]; then W="--workspace apps/$APP"; else W=""; fi
-          npm run lint --if-present $W
-          npm run typecheck --if-present $W
-          npm run test --if-present $W
-          npm run build --if-present $W
+          failed=""
+          for app in ${APPS:-.}; do
+            if [ "$app" = . ]; then W=(); else W=(--workspace "apps/$app"); fi
+            echo "::group::${app}"
+            npm run lint --if-present "${W[@]}" \
+              && npm run typecheck --if-present "${W[@]}" \
+              && npm run test --if-present "${W[@]}" \
+              && npm run build --if-present "${W[@]}" \
+              || failed="$failed $app"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::failed:$failed"
+            exit 1
+          fi
+      - if: ${{ !cancelled() }}
+        uses: Discordia-Grupo-15/.github/.github/actions/gitleaks@main
+        with:
+          version: ${{ inputs.gitleaks-version }}

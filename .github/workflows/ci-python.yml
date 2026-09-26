@@ -9,47 +9,48 @@ on:
       coverage-threshold:
         type: number
         default: 60
+      gitleaks-version:
+        type: string
+        default: "8.30.1"
 
 permissions:
   contents: read
 
 jobs:
-  lint:
+  # One job rather than lint, test and secrets in parallel: GitHub rounds every
+  # job up to a whole minute, so four jobs of a few seconds each were billed as
+  # four minutes. The image build is not here either: build-image covers it,
+  # called by each repo only on pull requests that touch how the image is
+  # built, so a pull request that changes only code does not pay for it.
+  check:
     runs-on: ubuntu-latest
     steps:
+      # Full history for gitleaks, which scans every commit.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       # Exact version on purpose: astral-sh/setup-uv stopped publishing the
       # moving major tag after v7, so @v10 does not resolve.
       - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           python-version: ${{ inputs.python-version }}
-      - run: uv sync --all-extras --dev
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      # Exact version on purpose: astral-sh/setup-uv stopped publishing the
-      # moving major tag after v7, so @v10 does not resolve.
-      - uses: astral-sh/setup-uv@v10.0.1
+      # The images install with `uv sync --frozen`, which fails when uv.lock is
+      # behind pyproject.toml. A plain `uv sync` here would quietly update the
+      # lock and pass, so a stale lock only surfaced when publishing the image.
+      - run: uv lock --check
+      # The steps below run even after an earlier failure, so a single run
+      # reports everything that is wrong instead of one push per problem.
+      # --frozen installs what the lock says, the same as the image does.
+      - if: ${{ !cancelled() }}
+        run: uv sync --frozen --all-extras --dev
+      - if: ${{ !cancelled() }}
+        run: uv run ruff check .
+      - if: ${{ !cancelled() }}
+        run: uv run ruff format --check .
+      - if: ${{ !cancelled() }}
+        run: uv run pytest --cov=src --cov-report=term-missing --cov-fail-under=${{ inputs.coverage-threshold }}
+      - if: ${{ !cancelled() }}
+        uses: Discordia-Grupo-15/.github/.github/actions/gitleaks@main
         with:
-          enable-cache: true
-          python-version: ${{ inputs.python-version }}
-      - run: uv sync --all-extras --dev
-      - run: uv run pytest --cov=src --cov-report=term-missing --cov-fail-under=${{ inputs.coverage-threshold }}
-
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/build-push-action@v7
-        with:
-          context: .
-          push: false
-          tags: ${{ github.event.repository.name }}:ci
-
-  secrets:
-    uses: Discordia-Grupo-15/.github/.github/workflows/secrets-scan.yml@main
+          version: ${{ inputs.gitleaks-version }}
