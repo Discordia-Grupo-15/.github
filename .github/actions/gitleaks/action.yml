@@ -1,0 +1,23 @@
+name: Gitleaks
+description: >
+  Scans the whole git history for secrets. Expects the repository checked out
+  with fetch-depth 0, or only the last commit gets scanned.
+
+# A composite action rather than only the secrets-scan workflow: the CI
+# workflows run the scan as a step of their single job, and a reusable workflow
+# can only be called as a job of its own, which GitHub bills as one more minute.
+inputs:
+  version:
+    description: Gitleaks release to download.
+    default: "8.30.1"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+          | tar -xz -C /usr/local/bin gitleaks
+        gitleaks git . --no-banner --redact --log-opts="--all"
