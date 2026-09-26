@@ -1,0 +1,25 @@
+name: Build image
+
+# Builds the image without publishing it, to catch a pull request that breaks
+# it before the merge instead of in publish-image. It is not part of the CI
+# workflows because most pull requests only touch code, which the tests already
+# cover: each repo calls it from a workflow of its own, filtered by paths to the
+# files that change how the image is built (Dockerfile, lockfiles and so on).
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # Only the runner's platform: building arm64 too would take QEMU, and what
+  # breaks a build here (a stale lockfile, a missing file) breaks both alike.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          tags: ${{ github.event.repository.name }}:ci
