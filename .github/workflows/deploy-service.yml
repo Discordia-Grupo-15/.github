@@ -13,6 +13,12 @@ on:
         description: Service name exactly as it appears in the compose file.
         type: string
         required: true
+      extra_services:
+        description: >-
+          Space separated services that run this same image and its tag
+          variable, recreated together with the service. Empty for most repos.
+        type: string
+        default: ""
       compose_dir:
         description: Directory on the host holding the compose file and the .env.
         type: string
@@ -41,6 +47,7 @@ jobs:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
           SERVICE: ${{ inputs.service }}
+          EXTRA: ${{ inputs.extra_services }}
           DIR: ${{ inputs.compose_dir }}
           FILE: ${{ inputs.compose_file }}
         run: |
@@ -60,6 +67,13 @@ jobs:
           # its own commits, deploying gateway would make Compose resolve
           # identity-service at gateway's sha and fail with "not found".
           VAR="$(printf '%s' "$SERVICE" | tr 'a-z-' 'A-Z_')_TAG"
+
+          # Services that share the image and its tag variable, like identity's
+          # recovery worker. Deploying only the main one left them running the
+          # previous build next to the new one until someone recreated them by
+          # hand. Naming a service on the command line starts it even when it
+          # sits in a compose profile, so the profile need not be enabled.
+          SERVICES="$SERVICE${EXTRA:+ $EXTRA}"
 
           # The tag is written into the host's .env instead of being passed
           # inline, because an inline variable only lives for the length of this
@@ -81,5 +95,5 @@ jobs:
              && touch .env \
              && { grep -v '^$VAR=' .env; printf '%s=%s\n' '$VAR' '$TAG'; } > .env.tmp \
              && mv .env.tmp .env \
-             && docker compose -f '$FILE' pull '$SERVICE' \
-             && docker compose -f '$FILE' up -d --wait '$SERVICE'"
+             && docker compose -f '$FILE' pull $SERVICES \
+             && docker compose -f '$FILE' up -d --wait $SERVICES"
