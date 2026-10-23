@@ -12,6 +12,12 @@ on:
       gitleaks-version:
         type: string
         default: "8.30.1"
+      # Starts a disposable Redis for the tests that need a real one (the
+      # gateway's access projection and streams). Off by default so repos that
+      # do not use Redis do not pay for pulling the image.
+      redis:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -41,6 +47,31 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.2
+      # A container started by hand rather than a job `services:` entry: some
+      # tests stop and start Redis through `docker` to exercise an outage, and
+      # they need the container name, which `services:` does not let us choose.
+      # The image is the one local-env runs, pinned by digest.
+      #
+      # GOFLAGS=-p=1 runs the packages one after another: they share this one
+      # Redis, and the outage test restarting it changes the run_id under the
+      # stream tests of another package running at the same time.
+      - if: ${{ !cancelled() && inputs.redis }}
+        run: |
+          password=$(openssl rand -hex 32)
+          echo "::add-mask::$password"
+          docker run -d --name redis-tests -p 127.0.0.1:6379:6379 \
+            redis:8.2.10-alpine@sha256:b51665e66f00759be7c3152ad5ac3c66fb2f619c13ef62dea7cc1f9914524635 \
+            redis-server --requirepass "$password" --appendonly yes --appendfsync everysec >/dev/null
+          for _ in $(seq 50); do
+            docker exec -e REDISCLI_AUTH="$password" redis-tests redis-cli ping >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          docker exec -e REDISCLI_AUTH="$password" redis-tests redis-cli ping >/dev/null
+          {
+            echo "REDIS_TEST_URL=redis://default:$password@127.0.0.1:6379/0"
+            echo "REDIS_TEST_CONTAINER=redis-tests"
+            echo "GOFLAGS=-p=1"
+          } >> "$GITHUB_ENV"
       - id: test
         if: ${{ !cancelled() }}
         run: go test ./... -race -covermode=atomic -coverprofile=coverage.out
