@@ -19,6 +19,10 @@ on:
           variable, recreated together with the service. Empty for most repos.
         type: string
         default: ""
+      post_deploy_services:
+        description: Space separated one-shot Compose jobs to run after service readiness.
+        type: string
+        default: ""
       compose_dir:
         description: Directory on the host holding the compose file and the .env.
         type: string
@@ -48,6 +52,7 @@ jobs:
           USER: ${{ secrets.DEPLOY_USER }}
           SERVICE: ${{ inputs.service }}
           EXTRA: ${{ inputs.extra_services }}
+          POST: ${{ inputs.post_deploy_services }}
           DIR: ${{ inputs.compose_dir }}
           FILE: ${{ inputs.compose_file }}
         run: |
@@ -74,6 +79,9 @@ jobs:
           # hand. Naming a service on the command line starts it even when it
           # sits in a compose profile, so the profile need not be enabled.
           SERVICES="$SERVICE${EXTRA:+ $EXTRA}"
+          for JOB in $POST; do
+            [[ "$JOB" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || { echo 'Invalid post-deploy service'; exit 1; }
+          done
 
           # The tag is written into the host's .env instead of being passed
           # inline, because an inline variable only lives for the length of this
@@ -95,5 +103,6 @@ jobs:
              && touch .env \
              && { grep -v '^$VAR=' .env; printf '%s=%s\n' '$VAR' '$TAG'; } > .env.tmp \
              && mv .env.tmp .env \
-             && docker compose -f '$FILE' pull $SERVICES \
-             && docker compose -f '$FILE' up -d --wait $SERVICES"
+             && docker compose -f '$FILE' pull $SERVICES $POST \
+             && docker compose -f '$FILE' up -d --wait $SERVICES \
+             && for JOB in $POST; do docker compose -f '$FILE' run --rm --no-deps \$JOB || exit 1; done"
