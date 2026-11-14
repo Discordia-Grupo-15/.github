@@ -7,6 +7,10 @@ on:
         description: Architectures to build for.
         type: string
         default: linux/amd64,linux/arm64
+      build_args:
+        description: Public build-time settings, one KEY=value per line. Never pass credentials here.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -50,6 +54,7 @@ jobs:
         with:
           context: .
           platforms: ${{ inputs.platforms }}
+          build-args: ${{ inputs.build_args }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           # metadata-action writes org.opencontainers.image.source here, which
