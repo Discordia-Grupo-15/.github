@@ -49,7 +49,7 @@ jobs:
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
+          SSH_USER: ${{ secrets.DEPLOY_USER }}
           SERVICE: ${{ inputs.service }}
           EXTRA: ${{ inputs.extra_services }}
           POST: ${{ inputs.post_deploy_services }}
@@ -79,8 +79,8 @@ jobs:
           # hand. Naming a service on the command line starts it even when it
           # sits in a compose profile, so the profile need not be enabled.
           SERVICES="$SERVICE${EXTRA:+ $EXTRA}"
-          for JOB in $POST; do
-            [[ "$JOB" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || { echo 'Invalid post-deploy service'; exit 1; }
+          for JOB in "$SERVICE" $EXTRA $POST; do
+            [[ "$JOB" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || { echo 'Invalid service name'; exit 1; }
           done
 
           # The tag is written into the host's .env instead of being passed
@@ -98,11 +98,37 @@ jobs:
           # --wait blocks until the container reports healthy and exits non zero
           # if it never does, so a deploy that starts a broken image fails here
           # instead of going green while the service crashloops.
-          ssh -i key -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
-            "cd '$DIR' \
-             && touch .env \
-             && { grep -v '^$VAR=' .env; printf '%s=%s\n' '$VAR' '$TAG'; } > .env.tmp \
-             && mv .env.tmp .env \
-             && docker compose -f '$FILE' pull $SERVICES $POST \
-             && docker compose -f '$FILE' up -d --wait $SERVICES \
-             && for JOB in $POST; do docker compose -f '$FILE' run --rm --no-deps \$JOB || exit 1; done"
+          # Quote arguments for the remote shell; the script itself travels
+          # literally, so values cannot become shell code. Ubuntu provides flock.
+          printf -v REMOTE_COMMAND 'bash -s -- %q %q %q %q %q %q' \
+            "$DIR" "$FILE" "$VAR" "$TAG" "$SERVICES" "$POST"
+          ssh -i key -o StrictHostKeyChecking=accept-new "$SSH_USER@$HOST" "$REMOTE_COMMAND" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          DIR=$1
+          FILE=$2
+          VAR=$3
+          TAG=$4
+          SERVICES=$5
+          POST=$6
+          cd "$DIR"
+
+          # All repositories deploy to this directory. Hold one host lock for
+          # the whole operation, including Compose and post-migration grants.
+          exec 9>.deploy.lock
+          flock -w 600 9
+          umask 077
+          touch .env
+          DEPLOY_ENV_TEMP=$(mktemp .env.XXXXXX)
+          trap 'rm -f "$DEPLOY_ENV_TEMP"' EXIT
+          awk -v name="$VAR" 'index($0,name "=") != 1' .env > "$DEPLOY_ENV_TEMP"
+          printf '%s=%s\n' "$VAR" "$TAG" >> "$DEPLOY_ENV_TEMP"
+          mv "$DEPLOY_ENV_TEMP" .env
+
+          # Service names were validated before SSH. Deliberate word splitting
+          # turns the space-separated lists into Compose arguments.
+          docker compose -f "$FILE" pull $SERVICES $POST
+          docker compose -f "$FILE" up -d --wait $SERVICES
+          for JOB in $POST; do
+            docker compose -f "$FILE" run --rm --no-deps "$JOB"
+          done
+          REMOTE_SCRIPT
